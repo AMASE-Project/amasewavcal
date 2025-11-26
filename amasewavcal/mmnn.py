@@ -1,0 +1,278 @@
+#!/usr/bin/env python
+# -*-coding:utf-8 -*-
+'''
+@File:         mmnn.py
+@Author:       Guangquan ZENG
+@Contact:      guangquan.zeng@outlook.com
+@Description:  Wavelength calibration functions for the AMASE project.
+'''
+
+import numpy as np
+from itertools import combinations
+from itertools import product
+from scipy.optimize import minimize
+from amasedrp.utils.parallel_processing import run as prun
+from .wavcal_utils import inverse_wavelength_solution
+
+
+class MmNn():
+    """
+    Class to handle wavelength calibration using the M-m-N-n algorithm.
+    """
+
+    def __init__(
+        self,
+        M_known_wls: list[float],
+        m_known_wls: list[float],
+        N_peak_ys: list[float],
+        n_peak_ys: list[float],
+        deg: int = 3,
+        poly_form: object = np.polynomial.Legendre,
+        wl_increases_with_y: bool = True,
+        reject_residual_outliers: bool = True,
+    ):
+        """Initialize the MmNn class for wavelength calibration.
+
+        Parameters
+        ----------
+        M_known_wls : list[float]
+            M prominent emission lines from calibration lamp spectra.
+        m_known_wls : list[float]
+            m of M most reliably detectable lines.
+        N_peak_ys : list[float]
+            N significant peaks detected in the uncalibrated spectrum.
+        n_peak_ys : list[float]
+            n of N most strongest peaks.
+        deg : int, optional
+            Degree of the polynomial for wavelength solution, by default 3.
+        poly_form : object, optional
+            Polynomial form to use, by default np.polynomial.Legendre.
+        wl_increases_with_y : bool, optional
+            Whether wavelength increases with y-coordinate, by default True.
+        reject_residual_outliers : bool, optional
+            Whether to reject outliers in residuals when calculating RMSE,
+            by default True.
+
+        # NOTE: deg + 1 <= len(m_known_wls) <= len(n_peak_ys)
+        # NOTE:
+        # (1) M_known_wls should be included in N_peak_ys, as much as possible
+        # (2) m_known_wls should be included in n_peak_ys, as much as possible
+        """
+        self.M_known_wls = M_known_wls
+        self.m_known_wls = m_known_wls
+        self.N_peak_ys = N_peak_ys
+        self.n_peak_ys = n_peak_ys
+        self.deg = deg
+        self.poly_form = poly_form
+        self.wl_increases_with_y = wl_increases_with_y
+        self.reject_residual_outliers = reject_residual_outliers
+
+    def calculate_fitting_residuals(self, poss_poly):
+        """
+        Suppose that the (strong-enough) M lines with known wavelength could be
+        detected, and matched to one of the N peaks, as much as possible.
+        This function calculates the fitting residuals by matching M lines to
+        the closest peak and computing the residuals.
+        The smaller the residuals, the better the fitting.
+        """
+        # residuals between known lines and their nearest peaks
+        N_peak_wls = poss_poly(self.N_peak_ys)
+        residuals = np.abs(N_peak_wls[:, None] - self.M_known_wls[None, :])
+        residuals = np.nanmin(residuals, axis=0)  # in wavelength unit
+        return residuals
+
+    def calculate_fitting_rmse(self, poss_poly):
+        """
+        This function is used to calculate the RMSE for the possible fitting,
+        based on the residuals between the M known wavelengths and the possible
+        wavelengths of the N detected peak y coordinates.
+        The smaller the score, the better the fitting.
+        """
+        residuals = self.calculate_fitting_residuals(poss_poly)  # [wl unit]
+        # remove outliers
+        if self.reject_residual_outliers:
+            cond = (np.nanpercentile(residuals, 16) <= residuals)
+            cond &= (residuals <= np.nanpercentile(residuals, 84))
+            residuals = residuals[cond]
+            del cond
+        # calculate the RMSE of fitting residuals (in wavelength unit)
+        rmse = np.sqrt(np.sum(residuals ** 2)) / len(residuals)
+        return rmse
+
+    def _fit_wavelength_solution(
+            self,
+            ys: list[float],
+            wls: list[float],
+    ):
+        """
+        Fit the wavelength solution for given y coordinates and wavelengths.
+        And use the known wavelengths and all detected peaks to calculate
+        the RMSE for this fitting result.
+        """
+        if self.wl_increases_with_y:
+            ys = np.sort(ys)
+            wls = np.sort(wls)
+        else:
+            ys = np.sort(ys)
+            wls = np.sort(wls)[::-1]
+        try:
+            coeffs = self.poly_form.fit(ys, wls, deg=self.deg).convert().coef
+            poss_poly = self.poly_form(coeffs)
+            # calculate the RMSE for this fitting
+            rmse = self.calculate_fitting_rmse(poss_poly)
+        except:  # noqa: E722  # NOTE: check which cases may raise exceptions
+            coeffs = np.full(self.deg+1, 0., dtype=float)
+            coeffs[0] = -1.
+            rmse = -1.
+        output = np.append(coeffs, rmse)
+        return output
+
+    def find_possible_wavelength_solution(
+            self,
+            full_search: bool = True,
+            parallel: bool = True,
+            n_jobs: int = -1,
+            backend: str = 'loky',
+    ):
+        """
+        Find the possible wavelength solution using the M-m-N-n algorithm.
+        """
+        # NOTE:
+        # If full_search is True, then the return degree of the polynomial
+        #could be larger than "deg".
+        # full search: try to find the best solution. Could take a while.
+        if full_search:
+            inputs = []
+            for n in range(
+                    self.deg+1,
+                    min(len(self.n_peak_ys), len(self.m_known_wls))+1
+            ):
+                # possible combination
+                ys_poss_comb = np.array(list(
+                    combinations(self.n_peak_ys, n)
+                ))
+                wls_poss_comb = np.array(list(
+                    combinations(self.m_known_wls, n)
+                ))
+                # all possible pairs of combinations
+                inputs += list(product(
+                    ys_poss_comb, wls_poss_comb
+                ))
+            del n, ys_poss_comb, wls_poss_comb
+        # NOTE:
+        # if the initial guess is good enough:
+        # (1) e.g., "m_known_wls" and "n_peak_ys" exactly match each other,
+        #     corresponding to [deg+1] known lines.
+        # (2) e.g., at least [deg+1] lines of "m_known_wls" are
+        #     included in those of "n_peak_ys"
+        else:
+            # possible combination
+            ys_poss_comb = np.array(list(
+                combinations(self.n_peak_ys, self.deg+1)
+            ))
+            wls_poss_comb = np.array(list(
+                combinations(self.m_known_wls, self.deg+1)
+            ))
+            # all possible pairs of combinations
+            inputs = list(product(
+                ys_poss_comb, wls_poss_comb
+            ))
+            del ys_poss_comb, wls_poss_comb
+
+        # fit for all possible pairs of combinations
+        if len(inputs):
+            outputs = prun(
+                function=self._fit_wavelength_solution,
+                inputs=inputs,
+                parallel=parallel, n_jobs=n_jobs, backend=backend,
+            )
+            # find the best coefficients
+            rmses = [outputs[i][-1] for i in range(len(outputs))]
+            rmse = np.nanmin(rmses)
+            poss_coeffs = outputs[np.nanargmin(rmses)][:-1]
+            poss_poly = self.poly_form(poss_coeffs)
+        else:
+            coeffs = np.full(self.deg+1, 0., dtype=float)
+            coeffs[0] = -1.
+            rmse = -1.
+            poss_poly = self.poly_form(coeffs)
+        return poss_poly, rmse
+            
+    def refine_possible_wavelength_solution(self, ini_poss_poly):
+        """
+        Refine the wavelength solution using least squares fitting.
+        Given M known spectral lines and N detected peaks, finds the solution
+        that minimize the fitting RMSE.
+        """
+        # i.e., poss_poly = a * ini_poss_poly + b
+        # where a and b are the coefficients to be determined.
+        def objective(params):
+            a, b = params
+
+            # define the new polynomial as a * ini_poss_poly + b
+            def poss_poly(x):
+                return a * ini_poss_poly(x) + b
+
+            # calculate the fitting RMSE
+            return self.calculate_fitting_rmse(poss_poly)
+
+        # initial guess for a and b
+        initial_guess = [1.0, 0.0]
+        initial_rmse = objective(initial_guess)
+        # minimize the objective function
+        result = minimize(objective, initial_guess)
+        # extract the optimized parameters
+        a_opt, b_opt = result.x
+        del result
+        # optimized result
+        if initial_rmse < objective([a_opt, b_opt]):
+            a_opt, b_opt = initial_guess
+        poss_poly = a_opt * ini_poss_poly + b_opt
+        rmse = self.calculate_fitting_rmse(poss_poly)
+        return poss_poly, rmse
+
+    def wavelength_calibration(
+            self,
+            full_search: bool = True,
+            parallel: bool = True,
+            n_jobs: int = -1,
+            backend: str = 'loky',
+            refine_until_convergence: bool = True,
+            refine_tolerance: float = 1e-8,
+            y_coor_min: float = np.nan,
+            y_coor_max: float = np.nan,
+    ):
+        """
+        Perform wavelength calibration using the M-m-N-n algorithm.
+        """
+        # find the possible wavelength solution
+        poss_poly, rmse = self.find_possible_wavelength_solution(
+            full_search=full_search,
+            parallel=parallel,
+            n_jobs=n_jobs,
+            backend=backend,
+        )
+
+        # keep refining the solution until convergence
+        if refine_until_convergence:
+            while True:
+                # use N_peak_ys and M_known_wls to refine the solution
+                old_rmse = float(rmse)
+                poss_poly, rmse = self.refine_possible_wavelength_solution(
+                    poss_poly
+                )
+                if np.isclose(old_rmse, rmse, atol=refine_tolerance):
+                    break
+            rmse = self.calculate_fitting_rmse(poss_poly)
+
+        # NOTE: Need to check the monotonicity of the solution? How?
+
+        # store the final result
+        self.solution = poss_poly
+        self.solution_rmse = rmse
+        if not np.isnan(y_coor_min) and not np.isnan(y_coor_max):
+            self.inv_solution = lambda wl: inverse_wavelength_solution(
+                poss_poly, wl, y_min=y_coor_min, y_max=y_coor_max
+            )
+        else:
+            self.inv_solution = None
