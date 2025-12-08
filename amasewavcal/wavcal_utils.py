@@ -1,15 +1,16 @@
 #!/usr/bin/env python
 # -*-coding:utf-8 -*-
 '''
-@File:         wavcal_utils.py
-@Author:       Guangquan ZENG
-@Contact:      guangquan.zeng@outlook.com
-@Description:  Some utility functions for AMASE wavelength calibration.
+@File:         mmnn.py
+@Author:       AMASE team
+@Website:      https://github.com/AMASE-Project
+@Description:  Wavelength calibration functions for the AMASE project.
 '''
 
 import numpy as np
 from scipy.signal import find_peaks
 from scipy.ndimage import gaussian_filter1d
+
 
 def detect_lines(spectrum, N=100, n=20, smooth=True, smooth_sigma=1.):
     """
@@ -60,6 +61,7 @@ def inverse_wavelength_solution(
         y_mid = (y_min + y_max) / 2.
     return y_mid
 
+
 def find_nearest(array_1, array_2):
     """
     For each element in array_1, find the nearest element in array_2.
@@ -72,3 +74,20 @@ def find_nearest(array_1, array_2):
         indices.append(idx)
     indices = np.array(indices, dtype=int)
     return array_1, array_2[indices], indices
+
+
+def check_solution_monotonicity(solution, y_min, y_max):
+    """
+    Check whether the wavelength solution is monotonic in the given range.
+    Return 1 if wl increases with y, -1 if wl decreases with y,
+    and 0 if not monotonic.
+    """
+    ys = np.arange(y_min, y_max + 1)
+    wls = solution(ys)
+    diffs = np.diff(wls)
+    if np.all(diffs > 0):
+        return 1
+    elif np.all(diffs < 0):
+        return -1
+    else:
+        return 0

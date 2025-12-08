@@ -2,8 +2,8 @@
 # -*-coding:utf-8 -*-
 '''
 @File:         mmnn.py
-@Author:       Guangquan ZENG
-@Contact:      guangquan.zeng@outlook.com
+@Author:       AMASE team
+@Website:      https://github.com/AMASE-Project
 @Description:  Wavelength calibration functions for the AMASE project.
 '''
 
@@ -13,6 +13,7 @@ from itertools import product
 from scipy.optimize import minimize
 from amasedrp.utils.parallel_processing import run as prun
 from .wavcal_utils import inverse_wavelength_solution
+from .wavcal_utils import check_solution_monotonicity
 
 
 class MmNn():
@@ -26,6 +27,7 @@ class MmNn():
         m_known_wls: list[float],
         N_peak_ys: list[float],
         n_peak_ys: list[float],
+        peak_y_coor_lim: list[int] = [0, 10000],
         deg: int = 3,
         poly_form: object = np.polynomial.Legendre,
         wl_increases_with_y: bool = True,
@@ -43,6 +45,8 @@ class MmNn():
             N significant peaks detected in the uncalibrated spectrum.
         n_peak_ys : list[float]
             n of N most strongest peaks.
+        peak_y_coor_lim : list[int], optional
+            The y-coordinate limits for detected peaks, by default [0, 10000].
         deg : int, optional
             Degree of the polynomial for wavelength solution, by default 3.
         poly_form : object, optional
@@ -52,6 +56,12 @@ class MmNn():
         reject_residual_outliers : bool, optional
             Whether to reject outliers in residuals when calculating RMSE,
             by default True.
+        solution : object
+            The fitted wavelength solution polynomial.
+        inv_solution : object
+            The inverse wavelength solution function.
+        solution_rmse : float
+            The RMSE of the fitted wavelength solution.
 
         # NOTE: deg + 1 <= len(m_known_wls) <= len(n_peak_ys)
         # NOTE:
@@ -62,10 +72,15 @@ class MmNn():
         self.m_known_wls = m_known_wls
         self.N_peak_ys = N_peak_ys
         self.n_peak_ys = n_peak_ys
+        self.peak_y_coor_lim = peak_y_coor_lim
         self.deg = deg
         self.poly_form = poly_form
         self.wl_increases_with_y = wl_increases_with_y
         self.reject_residual_outliers = reject_residual_outliers
+        self.solution = None
+        self.inv_solution = None
+        self.solution_rmse = np.nan
+        self.solution_monotonicity = None
 
     def calculate_fitting_residuals(self, poss_poly):
         """
@@ -139,7 +154,7 @@ class MmNn():
         """
         # NOTE:
         # If full_search is True, then the return degree of the polynomial
-        #could be larger than "deg".
+        # could be larger than "deg".
         # full search: try to find the best solution. Could take a while.
         if full_search:
             inputs = []
@@ -197,7 +212,7 @@ class MmNn():
             rmse = -1.
             poss_poly = self.poly_form(coeffs)
         return poss_poly, rmse
-            
+
     def refine_possible_wavelength_solution(self, ini_poss_poly):
         """
         Refine the wavelength solution using least squares fitting.
@@ -239,12 +254,12 @@ class MmNn():
             backend: str = 'loky',
             refine_until_convergence: bool = True,
             refine_tolerance: float = 1e-8,
-            y_coor_min: float = np.nan,
-            y_coor_max: float = np.nan,
     ):
         """
         Perform wavelength calibration using the M-m-N-n algorithm.
         """
+        y_coor_min = np.min(self.peak_y_coor_lim).astype(float)
+        y_coor_max = np.max(self.peak_y_coor_lim).astype(float)
         # find the possible wavelength solution
         poss_poly, rmse = self.find_possible_wavelength_solution(
             full_search=full_search,
@@ -276,3 +291,9 @@ class MmNn():
             )
         else:
             self.inv_solution = None
+        # check the monotonicity of the solution
+        self.solution_monotonicity = check_solution_monotonicity(
+            self.solution,
+            y_min=y_coor_min,
+            y_max=y_coor_max,
+        )
