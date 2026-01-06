@@ -57,9 +57,9 @@ class MmNn():
             Whether to reject outliers in residuals when calculating RMSE,
             by default True.
         solution : object
-            The fitted wavelength solution polynomial.
+            The fitted wavelength solution function (from y to wavelength).
         inv_solution : object
-            The inverse wavelength solution function.
+            The inverse wavelength solution function (from wavelength to y).
         solution_rmse : float
             The RMSE of the fitted wavelength solution.
 
@@ -81,6 +81,10 @@ class MmNn():
         self.inv_solution = None
         self.solution_rmse = np.nan
         self.solution_monotonicity = None
+
+    # -------------------------------------------------------------------------
+    # for evaluating the fitting quality of possible wavelength solutions
+    # -------------------------------------------------------------------------
 
     def calculate_fitting_residuals(self, poss_poly):
         """
@@ -113,6 +117,10 @@ class MmNn():
         # calculate the RMSE of fitting residuals (in wavelength unit)
         rmse = np.sqrt(np.sum(residuals ** 2)) / len(residuals)
         return rmse
+
+    # -------------------------------------------------------------------------
+    # finding possible wavelength solutions
+    # -------------------------------------------------------------------------
 
     def _fit_wavelength_solution(
             self,
@@ -213,6 +221,10 @@ class MmNn():
             poss_poly = self.poly_form(coeffs)
         return poss_poly, rmse
 
+    # -------------------------------------------------------------------------
+    # refining the possible wavelength solution by minimizing the RMSE
+    # -------------------------------------------------------------------------
+
     def refine_possible_wavelength_solution(self, ini_poss_poly):
         """
         Refine the wavelength solution using least squares fitting.
@@ -246,6 +258,10 @@ class MmNn():
         rmse = self.calculate_fitting_rmse(poss_poly)
         return poss_poly, rmse
 
+    # -------------------------------------------------------------------------
+    # core function for wavelength calibration
+    # -------------------------------------------------------------------------
+
     def wavelength_calibration(
             self,
             full_search: bool = True,
@@ -258,8 +274,8 @@ class MmNn():
         """
         Perform wavelength calibration using the M-m-N-n algorithm.
         """
-        y_coor_min = np.min(self.peak_y_coor_lim).astype(float)
-        y_coor_max = np.max(self.peak_y_coor_lim).astype(float)
+        # NOTE: this is the core function for wavelength calibration
+
         # find the possible wavelength solution
         poss_poly, rmse = self.find_possible_wavelength_solution(
             full_search=full_search,
@@ -280,17 +296,20 @@ class MmNn():
                     break
             rmse = self.calculate_fitting_rmse(poss_poly)
 
-        # NOTE: Need to check the monotonicity of the solution? How?
-
         # store the final result
         self.solution = poss_poly
         self.solution_rmse = rmse
+
+        # get and store the inverse solution (i.e., from wavelength to y)
+        y_coor_min = np.min(self.peak_y_coor_lim).astype(float)
+        y_coor_max = np.max(self.peak_y_coor_lim).astype(float)
         if not np.isnan(y_coor_min) and not np.isnan(y_coor_max):
             self.inv_solution = lambda wl: inverse_wavelength_solution(
                 poss_poly, wl, y_min=y_coor_min, y_max=y_coor_max
             )
         else:
             self.inv_solution = None
+
         # check the monotonicity of the solution
         self.solution_monotonicity = check_solution_monotonicity(
             self.solution,
