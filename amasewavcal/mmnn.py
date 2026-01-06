@@ -12,6 +12,7 @@ from itertools import combinations
 from itertools import product
 from scipy.optimize import minimize
 from amasedrp.utils.parallel_processing import run as prun
+from .wavcal_utils import find_nearest
 from .wavcal_utils import inverse_wavelength_solution
 from .wavcal_utils import check_solution_monotonicity
 
@@ -83,40 +84,98 @@ class MmNn():
         self.solution_monotonicity = None
 
     # -------------------------------------------------------------------------
-    # for evaluating the fitting quality of possible wavelength solutions
+    # evaluating the fitting quality of possible wavelength solutions
     # -------------------------------------------------------------------------
 
     def calculate_fitting_residuals(self, poss_poly):
         """
-        Suppose that the (strong-enough) M lines with known wavelength could be
-        detected, and matched to one of the N peaks, as much as possible.
-        This function calculates the fitting residuals by matching M lines to
-        the closest peak and computing the residuals.
+        Suppose that:
+        (1) M known lines with wavelengths are given;
+        (2) N peaks with y coordinates are detected;
+        (3) each known line should be matched to one of the detected peaks as
+            much as possible.
+        Given the wavelength solution, this function calculates the fitting
+        residuals (i.e, absolute differences) by matching M known lines to the
+        closest detected peak among N peaks.
         The smaller the residuals, the better the fitting.
         """
-        # residuals between known lines and their nearest peaks
         N_peak_wls = poss_poly(self.N_peak_ys)
-        residuals = np.abs(N_peak_wls[:, None] - self.M_known_wls[None, :])
-        residuals = np.nanmin(residuals, axis=0)  # in wavelength unit
-        return residuals
+        M_known_wls, _, indices = find_nearest(
+            self.M_known_wls, N_peak_wls)
+        M_closest_ys = self.N_peak_ys[indices]
+        residuals = M_known_wls - N_peak_wls[indices]
+        residuals = np.abs(residuals)
+        return residuals, M_known_wls, M_closest_ys
 
-    def calculate_fitting_rmse(self, poss_poly):
+    def calculate_fitting_rmse(self, poss_poly, verbose=False):
         """
-        This function is used to calculate the RMSE for the possible fitting,
-        based on the residuals between the M known wavelengths and the possible
-        wavelengths of the N detected peak y coordinates.
-        The smaller the score, the better the fitting.
+        Suppose that:
+        (1) M known lines with wavelengths are given;
+        (2) N peaks with y coordinates are detected;
+        (3) each known line should be matched to one of the detected peaks as
+            much as possible.
+        Given the wavelength solution, this function calculates the RMSE
+        by matching M known lines to the closest detected peak among N peaks.
+        The smaller the RMSE, the better the fitting.
         """
-        residuals = self.calculate_fitting_residuals(poss_poly)  # [wl unit]
-        # remove outliers
+        # calculate the fitting residuals (absolute differences)
+        residuals, M_known_wls, M_closest_ys \
+            = self.calculate_fitting_residuals(poss_poly)
+        # whether to reject the extreme residuals as outliers
+        # (e.g., extreme residuals may be caused by bad detected peaks)
         if self.reject_residual_outliers:
-            cond = (np.nanpercentile(residuals, 16) <= residuals)
-            cond &= (residuals <= np.nanpercentile(residuals, 84))
+            bounds = np.percentile(residuals, [16, 84])
+            bounds = np.array([np.nanmin(bounds), np.nanmax(bounds)])
+            cond = (bounds[0] <= residuals) & (residuals <= bounds[1])
             residuals = residuals[cond]
-            del cond
-        # calculate the RMSE of fitting residuals (in wavelength unit)
+            M_known_wls = M_known_wls[cond]
+            M_closest_ys = M_closest_ys[cond]
+            del bounds, cond
+        # calculate the fitting RMSE
         rmse = np.sqrt(np.sum(residuals ** 2)) / len(residuals)
-        return rmse
+        if verbose:
+            return rmse, M_known_wls, M_closest_ys
+        else:
+            return rmse
+
+    # -------------------------------------------------------------------------
+    # refining the possible wavelength solution by e.g.,
+    # (1) use least squares fitting to minimize the RMSE and slightly adjust
+    #     the coefficients of the polynomial;
+    # (2) use N_peak_wls and N_closest_wls to re-fit the polynomial.
+    # -------------------------------------------------------------------------
+
+    def refine_possible_solution(self, ini_poss_poly):
+        """
+        Refine the wavelength solution. Use least squares fitting to minimize
+        the RMSE by slightly adjusting the initial possible polynomial.
+        """
+        # i.e., poss_poly = a * ini_poss_poly + b
+        # where a and b are the coefficients to be determined.
+        def objective(params):
+            a, b = params
+
+            # define the new polynomial as a * ini_poss_poly + b
+            def poss_poly(x):
+                return a * ini_poss_poly(x) + b
+
+            # calculate the fitting RMSE
+            return self.calculate_fitting_rmse(poss_poly, verbose=False)
+
+        # initial guess for a and b
+        initial_guess = [1.0, 0.0]
+        initial_rmse = objective(initial_guess)
+        # minimize the objective function
+        result = minimize(objective, initial_guess)
+        # extract the optimized parameters
+        a_opt, b_opt = result.x
+        del result
+        # optimized result
+        if initial_rmse < objective([a_opt, b_opt]):
+            a_opt, b_opt = initial_guess
+        poss_poly = a_opt * ini_poss_poly + b_opt
+        rmse = self.calculate_fitting_rmse(poss_poly, verbose=False)
+        return poss_poly, rmse
 
     # -------------------------------------------------------------------------
     # finding possible wavelength solutions
@@ -222,43 +281,6 @@ class MmNn():
         return poss_poly, rmse
 
     # -------------------------------------------------------------------------
-    # refining the possible wavelength solution by minimizing the RMSE
-    # -------------------------------------------------------------------------
-
-    def refine_possible_wavelength_solution(self, ini_poss_poly):
-        """
-        Refine the wavelength solution using least squares fitting.
-        Given M known spectral lines and N detected peaks, finds the solution
-        that minimize the fitting RMSE.
-        """
-        # i.e., poss_poly = a * ini_poss_poly + b
-        # where a and b are the coefficients to be determined.
-        def objective(params):
-            a, b = params
-
-            # define the new polynomial as a * ini_poss_poly + b
-            def poss_poly(x):
-                return a * ini_poss_poly(x) + b
-
-            # calculate the fitting RMSE
-            return self.calculate_fitting_rmse(poss_poly)
-
-        # initial guess for a and b
-        initial_guess = [1.0, 0.0]
-        initial_rmse = objective(initial_guess)
-        # minimize the objective function
-        result = minimize(objective, initial_guess)
-        # extract the optimized parameters
-        a_opt, b_opt = result.x
-        del result
-        # optimized result
-        if initial_rmse < objective([a_opt, b_opt]):
-            a_opt, b_opt = initial_guess
-        poss_poly = a_opt * ini_poss_poly + b_opt
-        rmse = self.calculate_fitting_rmse(poss_poly)
-        return poss_poly, rmse
-
-    # -------------------------------------------------------------------------
     # core function for wavelength calibration
     # -------------------------------------------------------------------------
 
@@ -289,7 +311,7 @@ class MmNn():
             while True:
                 # use N_peak_ys and M_known_wls to refine the solution
                 old_rmse = float(rmse)
-                poss_poly, rmse = self.refine_possible_wavelength_solution(
+                poss_poly, rmse = self.refine_possible_solution(
                     poss_poly
                 )
                 if np.isclose(old_rmse, rmse, atol=refine_tolerance):
