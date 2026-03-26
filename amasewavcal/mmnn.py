@@ -168,7 +168,7 @@ class MmNn():
         inputs = self.generate_possible_combinations()
         if len(inputs) == 0:
             raise ValueError(
-                "Not enough known lines or detected peaks to fit the"
+                "Not enough known lines or detected peaks to fit the "
                 "wavelength solution.")
         # fit for all possible pairs of combinations
         outputs = prun(
