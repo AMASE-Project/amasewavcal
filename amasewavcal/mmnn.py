@@ -233,6 +233,16 @@ class MmNn():
             del bounds, cond
         # calculate the fitting RMSE
         rmse = np.sqrt(np.sum(residuals ** 2)) / len(residuals)
+        # NOTE: check this. And think how to ensure the monotonicity.
+        # # check the monotonicity of the solution,
+        # # and assign a large RMSE if the solution is not monotonic
+        # monotonicity = check_solution_monotonicity(
+        #     poss_poly,
+        #     y_min=np.min(self.peak_y_coor_lim).astype(float),
+        #     y_max=np.max(self.peak_y_coor_lim).astype(float),
+        # )
+        # if not monotonicity:
+        #     rmse = np.inf
         if verbose:
             return rmse, M_known_wls, M_closest_ys
         else:
