@@ -52,6 +52,7 @@ def inverse_wavelength_solution(
         solution, wl, y_min=0., y_max=9600., atol=1e-5,
 ):
     """ Inverse the wavelength solution to get y from wavelength. """
+    y_min, y_max = float(y_min), float(y_max)
     y_mid = (y_min + y_max) / 2.
     while np.abs(y_max - y_min) > atol:
         wl_mid = solution(y_mid)

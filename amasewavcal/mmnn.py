@@ -30,41 +30,13 @@ class MmNn():
         m_known_wls: list[float],
         N_peak_ys: list[float],
         n_peak_ys: list[float],
-        y_coor_lim: Optional[list[int]] = None,
+        y_lim: Optional[list[int]] = None,
         deg: int = 3,
         poly_form: object = np.polynomial.Polynomial,
         wl_increases_with_y: bool = True,
         reject_residual_outliers: bool = True,
     ):
         """Initialize the MmNn class for wavelength calibration.
-
-        Parameters
-        ----------
-        M_known_wls : list[float]
-            M prominent emission lines from calibration lamp spectra.
-        m_known_wls : list[float]
-            m of M most reliably detectable lines.
-        N_peak_ys : list[float]
-            N significant peaks detected in the uncalibrated spectrum.
-        n_peak_ys : list[float]
-            n of N most strongest peaks.
-        y_coor_lim : list[int], optional
-            The y-coordinate limits for detected peaks, by default [0, 10000].
-        deg : int, optional
-            Degree of the polynomial for wavelength solution, by default 3.
-        poly_form : object, optional
-            Polynomial form to use, by default np.polynomial.Legendre.
-        wl_increases_with_y : bool, optional
-            Whether wavelength increases with y-coordinate, by default True.
-        reject_residual_outliers : bool, optional
-            Whether to reject outliers in residuals when calculating RMSE,
-            by default True.
-        solution : object
-            The fitted wavelength solution function (from y to wavelength).
-        inv_solution : object
-            The inverse wavelength solution function (from wavelength to y).
-        solution_rmse : float
-            The RMSE of the fitted wavelength solution.
 
         # NOTE: deg + 1 <= len(m_known_wls) <= len(n_peak_ys)
         # NOTE:
@@ -75,21 +47,23 @@ class MmNn():
         self.m_known_wls = m_known_wls
         self.N_peak_ys = N_peak_ys
         self.n_peak_ys = n_peak_ys
-        self.y_coor_lim = y_coor_lim
+        self.y_lim = y_lim
         self.deg = deg
         self.poly_form = poly_form
         self.wl_increases_with_y = wl_increases_with_y
         self.reject_residual_outliers = reject_residual_outliers
-        self.solution = None
-        self.inv_solution = None
-        self.solution_rmse = np.nan
-        self.solution_monotonicity = None
 
     # -------------------------------------------------------------------------
     # pre-processing
     # -------------------------------------------------------------------------
     def pre_process(self):
-        pass
+        self.solution = None
+        self.inv_solution = None
+        self.solution_rmse = np.nan
+        self.solution_monotonicity = None
+        if self.y_lim is None:
+            self.y_lim = [np.min(self.N_peak_ys), np.max(self.N_peak_ys)]
+        self.y_min, self.y_max = np.min(self.y_lim), np.max(self.y_lim)
 
     # -------------------------------------------------------------------------
     # fitting all possible wavelength solutions and finding the best one
@@ -241,16 +215,6 @@ class MmNn():
             del bounds, cond
         # calculate the fitting RMSE
         rmse = np.sqrt(np.sum(residuals ** 2)) / len(residuals)
-        # NOTE: check this. And think how to ensure the monotonicity.
-        # # check the monotonicity of the solution,
-        # # and assign a large RMSE if the solution is not monotonic
-        # monotonicity = check_solution_monotonicity(
-        #     poss_poly,
-        #     y_min=np.min(self.y_coor_lim).astype(float),
-        #     y_max=np.max(self.y_coor_lim).astype(float),
-        # )
-        # if not monotonicity:
-        #     rmse = np.inf
         if verbose:
             return rmse, M_known_wls, M_closest_ys
         else:
@@ -346,19 +310,17 @@ class MmNn():
         self.solution_rmse = rmse
 
         # get and store the inverse solution (i.e., from wavelength to y)
-        y_coor_min = np.min(self.y_coor_lim).astype(float)
-        y_coor_max = np.max(self.y_coor_lim).astype(float)
-        if not np.isnan(y_coor_min) and not np.isnan(y_coor_max):
+        if ~np.isnan(self.y_min) and ~np.isnan(self.y_max):
             self.inv_solution = lambda wl: inverse_wavelength_solution(
-                poss_poly, wl, y_min=y_coor_min, y_max=y_coor_max
+                poss_poly, wl, y_min=self.y_min, y_max=self.y_max
             )
         else:
             self.inv_solution = None
         # check the monotonicity of the solution
         self.solution_monotonicity = check_solution_monotonicity(
             self.solution,
-            y_min=y_coor_min,
-            y_max=y_coor_max,
+            y_min=self.y_min,
+            y_max=self.y_max,
         )
 
     # -------------------------------------------------------------------------
