@@ -11,6 +11,7 @@ import numpy as np
 from scipy.signal import find_peaks
 from scipy.ndimage import gaussian_filter1d
 from scipy.optimize import minimize
+from numpy.polynomial import Chebyshev as T
 
 
 def detect_lines(spectrum, N=100, n=20, smooth=True, smooth_sigma=1.):
@@ -120,38 +121,45 @@ def fit_monotonic_solution(
         raise ValueError("ys and wls must have the same length.")
     if len(ys) < deg + 1:
         raise ValueError("Not enough data points to fit the polynomial.")
+    if monotonicity not in [1., -1.]:
+        raise ValueError("Monotonicity should be either 1 or -1.")
     # preprocess
     if y_min is None:
         y_min = np.min(ys)
     if y_max is None:
         y_max = np.max(ys)
+    domain = [y_min, y_max]
 
-    # the objective function to minimize
+    # use Chebyshev polynomials for better numerical stability
+    # initiall fit with Chebyshev polynomials
+    init_fit = T.fit(ys, wls, deg=deg, domain=domain)
+    ini_coeffs = init_fit.coef
+
+    # the objective function to minimize (i.e., MSE loss)
     def objective(coeffs):
-        return np.sum((poly_form(coeffs)(ys) - wls) ** 2)  # MSE loss
-
-    # initial guess for the coefficients
-    ini_coeffs = poly_form.fit(ys, wls, deg=deg).convert().coef
+        return np.sum((T(coeffs, domain=domain)(ys) - wls) ** 2)
 
     # the constraint function to ensure monotonicity
     def constraint(coeffs):
-        y_test = np.arange(y_min, y_max + 1)
-        wls_test = poly_form(coeffs)(y_test)
-        diffs = np.diff(wls_test)
-        # for increasing, all diffs should be > 0
-        if monotonicity == 1.:
-            return np.min(diffs)
-        # for decreasing, all diffs should be < 0
-        elif monotonicity == -1.:
-            return -np.max(diffs)
-        else:
-            raise ValueError("Monotonicity should be either 1 or -1.")
+        deriv_poly = T(coeffs, domain=domain).deriv()
+        test_points = np.linspace(y_min, y_max, deg * 2 + 1)
+        return monotonicity * deriv_poly(test_points)  # should be >= 0
 
     # optimize the coefficients with the monotonicity constraint
-    constraints = {'type': 'ineq', 'fun': constraint}
-    result = minimize(objective, ini_coeffs, constraints=constraints)
+    result = minimize(
+        objective, ini_coeffs,
+        constraints={'type': 'ineq', 'fun': constraint},
+        method='SLSQP',
+    )
     if not result.success:
-        raise RuntimeError("Optimization failed: " + result.message)
-    coeffs = result.x
-    solution = poly_form(coeffs)
+        print(f"Warning: Optimization failed - {result.message}")
+        print("Falling back to the fit without monotonicity constraint.")
+        coeffs = ini_coeffs
+    else:
+        coeffs = result.x
+    solution_cheby = T(coeffs, domain=domain)
+
+    # convert back to the original polynomial form
+    solution = solution_cheby.convert(kind=poly_form)
+
     return solution
