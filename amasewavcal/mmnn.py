@@ -8,6 +8,7 @@
 '''
 
 import numpy as np
+from typing import Optional
 from itertools import combinations
 from itertools import product
 from scipy.optimize import minimize
@@ -29,9 +30,9 @@ class MmNn():
         m_known_wls: list[float],
         N_peak_ys: list[float],
         n_peak_ys: list[float],
-        y_coor_lim: list[int] = [0, 10000],
+        y_coor_lim: Optional[list[int]] = None,
         deg: int = 3,
-        poly_form: object = np.polynomial.Legendre,
+        poly_form: object = np.polynomial.Polynomial,
         wl_increases_with_y: bool = True,
         reject_residual_outliers: bool = True,
     ):
@@ -83,6 +84,12 @@ class MmNn():
         self.inv_solution = None
         self.solution_rmse = np.nan
         self.solution_monotonicity = None
+
+    # -------------------------------------------------------------------------
+    # pre-processing
+    # -------------------------------------------------------------------------
+    def pre_process(self):
+        pass
 
     # -------------------------------------------------------------------------
     # fitting all possible wavelength solutions and finding the best one
@@ -305,30 +312,16 @@ class MmNn():
         return poss_poly, rmse
 
     # -------------------------------------------------------------------------
-    # core function for wavelength calibration
+    # post-processing
     # -------------------------------------------------------------------------
-
-    def wavelength_calibration(
+    def post_process(
             self,
-            parallel: bool = True,
-            n_jobs: int = -1,
-            backend: str = 'loky',
             refine: bool = True,  # NOTE: for debugging, can be removed later
             refit: bool = True,  # NOTE: for debugging, can be removed later
     ):
-        """
-        Perform wavelength calibration using the M-m-N-n algorithm, i.e.,
-        (1) based on m most reliably detectable known lines and
-            n strongest detected peaks, find all possible wavelength solutions;
-        (2) based on M known lines and N detected peaks, evaluate the fitting
-            quality of each possible solution, and select the best one.
-        """
-        # find the best possible wavelength solution
-        poss_poly, rmse = self.find_best_possible_solution(
-            parallel=parallel,
-            n_jobs=n_jobs,
-            backend=backend,
-        )
+        # the current solution
+        poss_poly, rmse = self.solution, self.solution_rmse
+
         # refine the solution (until convergence)
         if refine:
             while True:
@@ -337,6 +330,7 @@ class MmNn():
                 if np.isclose(old_rmse, rmse, atol=1e-8):
                     break
             rmse = self.calculate_fitting_rmse(poss_poly)
+
         # re-fit the solution and further refine it (until convergence)
         if refit:
             poss_poly, rmse = self.refit_possible_solution(poss_poly)
@@ -346,9 +340,11 @@ class MmNn():
                 if np.isclose(old_rmse, rmse, atol=1e-8):
                     break
             rmse = self.calculate_fitting_rmse(poss_poly)
-        # store the final result
+
+        # store the solution after refine/re-fit/...
         self.solution = poss_poly
         self.solution_rmse = rmse
+
         # get and store the inverse solution (i.e., from wavelength to y)
         y_coor_min = np.min(self.y_coor_lim).astype(float)
         y_coor_max = np.max(self.y_coor_lim).astype(float)
@@ -364,3 +360,34 @@ class MmNn():
             y_min=y_coor_min,
             y_max=y_coor_max,
         )
+
+    # -------------------------------------------------------------------------
+    # core function for wavelength calibration
+    # -------------------------------------------------------------------------
+
+    def wavelength_calibration(
+            self,
+            parallel: bool = True,
+            n_jobs: int = -1,
+            backend: str = 'loky',
+    ):
+        """
+        Perform wavelength calibration using the M-m-N-n algorithm, i.e.,
+        (1) based on m most reliably detectable known lines and
+            n strongest detected peaks, find all possible wavelength solutions;
+        (2) based on M known lines and N detected peaks, evaluate the fitting
+            quality of each possible solution, and select the best one.
+        """
+        # pre-processing
+        self.pre_process()
+        # find the best possible wavelength solution
+        poss_poly, rmse = self.find_best_possible_solution(
+            parallel=parallel,
+            n_jobs=n_jobs,
+            backend=backend,
+        )
+        # store
+        self.solution = poss_poly
+        self.solution_rmse = rmse
+        # post-processing
+        self.post_process()
