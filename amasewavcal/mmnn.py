@@ -17,6 +17,7 @@ from .wavcal_utils import find_nearest
 from .wavcal_utils import inverse_wavelength_solution
 from .wavcal_utils import check_solution_monotonicity
 from .wavcal_utils import fit_solution
+from .wavcal_utils import fit_monotonic_solution
 
 
 class MmNn():
@@ -283,9 +284,26 @@ class MmNn():
             self,
             refine: bool = True,  # NOTE: for debugging, can be removed later
             refit: bool = True,  # NOTE: for debugging, can be removed later
+            ensure_monotonicity: bool = False,  # NOTE: for debugging, can be removed later  # noqa: E501
     ):
         # the current solution
         poss_poly, rmse = self.solution, self.solution_rmse
+
+        # re-fit the solution to ensure the monotonicity
+        # (by using the matched M_known_wls and M_closest_ys)
+        if ensure_monotonicity:
+            monotonicity = 1. if self.wl_increases_with_y else -1.
+            _, M_known_wls, M_closest_ys \
+                = self.calculate_fitting_residuals(poss_poly)
+            poss_poly = fit_monotonic_solution(
+                M_closest_ys, M_known_wls,
+                deg=self.deg,
+                poly_form=self.poly_form,
+                monotonicity=monotonicity,
+                y_min=self.y_min,
+                y_max=self.y_max,
+            )
+            rmse = self.calculate_fitting_rmse(poss_poly, verbose=False)
 
         # refine the solution (until convergence)
         if refine:
