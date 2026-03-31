@@ -69,7 +69,7 @@ class MmNn():
     # fitting all possible wavelength solutions and finding the best one
     # -------------------------------------------------------------------------
 
-    def _fit(ys, wls, deg=2, poly_form=np.polynomial.Polynomial):
+    def _fit(ys, wls, deg, poly_form):
         """
         Fit the wavelength solution for given y coordinates and wavelengths.
         """
@@ -206,7 +206,8 @@ class MmNn():
         # whether to reject the extreme residuals as outliers
         # (e.g., extreme residuals may be caused by bad detected peaks)
         if self.reject_residual_outliers:
-            bounds = np.percentile(residuals, [16, 84])
+            bounds = [5, 95]
+            bounds = np.percentile(residuals, bounds)
             bounds = np.array([np.nanmin(bounds), np.nanmax(bounds)])
             cond = (bounds[0] <= residuals) & (residuals <= bounds[1])
             residuals = residuals[cond]
