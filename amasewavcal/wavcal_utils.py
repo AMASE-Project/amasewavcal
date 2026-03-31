@@ -94,14 +94,37 @@ def check_solution_monotonicity(solution, y_min, y_max):
         return 0
 
 
-def fit_monotonic_polynomial(
+def fit_solution(ys, wls, deg=2, poly_form=np.polynomial.Polynomial):
+    """
+    Fit a polynomial wavelength solution to the given (ys, wls).
+    Return the fitted function.
+    """
+    if len(ys) != len(wls):
+        raise ValueError("ys and wls must have the same length.")
+    if len(ys) < deg + 1:
+        raise ValueError("Not enough data points to fit the polynomial.")
+    coeffs = poly_form.fit(ys, wls, deg=deg).convert().coef
+    solution = poly_form(coeffs)
+    return solution
+
+
+def fit_monotonic_solution(
         ys, wls, deg=2, poly_form=np.polynomial.Polynomial,
         monotonicity=1., y_min=None, y_max=None):
     """
-    Fit a monotonic polynomial to the given data points (ys, wls).
-    Return the fitted polynomial coefficients.
-    (monotonicity: 1 for increasing, -1 for decreasing.)
+    Fit a monotonic polynomial wavelength solution to the given (ys, wls).
+    Return the fitted function.
     """
+    if len(ys) != len(wls):
+        raise ValueError("ys and wls must have the same length.")
+    if len(ys) < deg + 1:
+        raise ValueError("Not enough data points to fit the polynomial.")
+    # preprocess
+    if y_min is None:
+        y_min = np.min(ys)
+    if y_max is None:
+        y_max = np.max(ys)
+
     # the objective function to minimize
     def objective(coeffs):
         return np.sum((poly_form(coeffs)(ys) - wls) ** 2)  # MSE loss
@@ -111,15 +134,7 @@ def fit_monotonic_polynomial(
 
     # the constraint function to ensure monotonicity
     def constraint(coeffs):
-        if y_min is None:
-            y_min_ = np.min(ys)
-        else:
-            y_min_ = y_min
-        if y_max is None:
-            y_max_ = np.max(ys)
-        else:
-            y_max_ = y_max
-        y_test = np.linspace(y_min_, y_max_, 100)
+        y_test = np.arange(y_min, y_max + 1)
         wls_test = poly_form(coeffs)(y_test)
         diffs = np.diff(wls_test)
         # for increasing, all diffs should be > 0
@@ -137,5 +152,5 @@ def fit_monotonic_polynomial(
     if not result.success:
         raise RuntimeError("Optimization failed: " + result.message)
     coeffs = result.x
-    poss_poly = poly_form(coeffs)
-    return poss_poly
+    solution = poly_form(coeffs)
+    return solution
