@@ -150,6 +150,7 @@ def fit_monotonic_solution(
         objective, ini_coeffs,
         constraints={'type': 'ineq', 'fun': constraint},
         method='SLSQP',
+        tol=1e-6,
     )
     if not result.success:
         print(f"Warning: Optimization failed - {result.message}")

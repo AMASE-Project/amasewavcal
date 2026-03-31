@@ -31,7 +31,7 @@ class MmNn():
         m_known_wls: list[float],
         N_peak_ys: list[float],
         n_peak_ys: list[float],
-        y_lim: Optional[list[int]] = None,
+        y_domain: Optional[list[int]] = None,
         deg: int = 3,
         poly_form: object = np.polynomial.Polynomial,
         wl_increases_with_y: bool = True,
@@ -48,7 +48,7 @@ class MmNn():
         self.m_known_wls = m_known_wls
         self.N_peak_ys = N_peak_ys
         self.n_peak_ys = n_peak_ys
-        self.y_lim = y_lim
+        self.y_domain = y_domain
         self.deg = deg
         self.poly_form = poly_form
         self.wl_increases_with_y = wl_increases_with_y
@@ -62,26 +62,13 @@ class MmNn():
         self.inv_solution = None
         self.solution_rmse = np.nan
         self.solution_monotonicity = None
-        if self.y_lim is None:
-            self.y_lim = [np.min(self.N_peak_ys), np.max(self.N_peak_ys)]
-        self.y_min, self.y_max = np.min(self.y_lim), np.max(self.y_lim)
+        if self.y_domain is None:
+            self.y_domain = [np.min(self.N_peak_ys), np.max(self.N_peak_ys)]
+        self.y_min, self.y_max = np.min(self.y_domain), np.max(self.y_domain)
 
     # -------------------------------------------------------------------------
     # fitting all possible wavelength solutions and finding the best one
     # -------------------------------------------------------------------------
-
-    def _fit(ys, wls, deg, poly_form):
-        """
-        Fit the wavelength solution for given y coordinates and wavelengths.
-        """
-        try:
-            poss_poly = fit_solution(ys, wls, deg=deg, poly_form=poly_form)
-        except:  # noqa: E722  # NOTE: check which cases may raise exceptions
-            print(f"Warning: fitting failed for ys: {ys}, wls: {wls}.")
-            coeffs = np.full(deg+1, 0., dtype=float)
-            coeffs[0] = -1.
-            poss_poly = poly_form(coeffs)
-        return poss_poly
 
     def generate_possible_combinations(self):
         """
@@ -108,6 +95,37 @@ class MmNn():
         del ys, wls
         return poss_comb
 
+    # # without monotonicity constraint
+    # def _fit(ys, wls, deg, poly_form, **kwargs):
+    #     """
+    #     Fit the wavelength solution for given y coordinates and wavelengths.
+    #     """
+    #     try:
+    #         poss_poly = fit_solution(ys, wls, deg=deg, poly_form=poly_form)
+    #     except:  # noqa: E722  # NOTE: check which cases may raise exceptions
+    #         print(f"Warning: fitting failed for ys: {ys}, wls: {wls}.")
+    #         coeffs = np.full(deg+1, 0., dtype=float)
+    #         coeffs[0] = -1.
+    #         poss_poly = poly_form(coeffs)
+    #     return poss_poly
+
+    # with monotonicity constraint
+    def _fit(ys, wls, deg, poly_form, monotonicity, y_min, y_max):
+        """
+        Fit the wavelength solution for given y coordinates and wavelengths.
+        """
+        try:
+            poss_poly = fit_monotonic_solution(
+                ys, wls, deg=deg, poly_form=poly_form,
+                monotonicity=monotonicity, y_min=y_min, y_max=y_max,
+            )
+        except:  # noqa: E722  # NOTE: check which cases may raise exceptions
+            print(f"Warning: fitting failed for ys: {ys}, wls: {wls}.")
+            coeffs = np.full(deg+1, 0., dtype=float)
+            coeffs[0] = -1. if monotonicity == 1. else 1.
+            poss_poly = poly_form(coeffs)
+        return poss_poly
+
     def fit_possible_solution(self, ys, wls):
         """
         Fit the wavelength solution for given possible combinations of
@@ -125,6 +143,11 @@ class MmNn():
             ys, wls,
             deg=self.deg,
             poly_form=self.poly_form,
+            monotonicity=1. if self.wl_increases_with_y else -1.,
+            y_min=None,
+            y_max=None,
+            # y_min=self.y_min,
+            # y_max=self.y_max,
         )
         rmse = self.calculate_fitting_rmse(poss_poly, verbose=False)
         # store the coefficients and RMSE
@@ -261,19 +284,29 @@ class MmNn():
         rmse = self.calculate_fitting_rmse(poss_poly, verbose=False)
         return poss_poly, rmse
 
-    def refit_possible_solution(self, ini_poss_poly):
+    def refit_possible_solution(self, ini_poss_poly, ensure_monotonicity=True):
         """
         Re-fit the wavelength solution using M_known_wls and M_closest_ys.
         """
         # based on the given possible polynomial,
         # get the M most closest y coordinates for M known wavelengths
-        rmse, M_known_wls, M_closest_ys = \
+        _, M_known_wls, M_closest_ys = \
             self.calculate_fitting_rmse(ini_poss_poly, verbose=True)
-        poss_poly = MmNn._fit(
-            M_closest_ys, M_known_wls,
-            deg=self.deg,
-            poly_form=self.poly_form,
-        )
+        if ensure_monotonicity:
+            poss_poly = fit_monotonic_solution(
+                M_closest_ys, M_known_wls,
+                deg=self.deg,
+                poly_form=self.poly_form,
+                monotonicity=1. if self.wl_increases_with_y else -1.,
+                y_min=self.y_min,
+                y_max=self.y_max,
+            )
+        else:
+            poss_poly = fit_solution(
+                M_closest_ys, M_known_wls,
+                deg=self.deg,
+                poly_form=self.poly_form,
+            )
         rmse = self.calculate_fitting_rmse(poss_poly, verbose=False)
         return poss_poly, rmse
 
@@ -284,26 +317,9 @@ class MmNn():
             self,
             refine: bool = True,  # NOTE: for debugging, can be removed later
             refit: bool = True,  # NOTE: for debugging, can be removed later
-            ensure_monotonicity: bool = False,  # NOTE: for debugging, can be removed later  # noqa: E501
     ):
         # the current solution
         poss_poly, rmse = self.solution, self.solution_rmse
-
-        # re-fit the solution to ensure the monotonicity
-        # (by using the matched M_known_wls and M_closest_ys)
-        if ensure_monotonicity:
-            monotonicity = 1. if self.wl_increases_with_y else -1.
-            _, M_known_wls, M_closest_ys \
-                = self.calculate_fitting_residuals(poss_poly)
-            poss_poly = fit_monotonic_solution(
-                M_closest_ys, M_known_wls,
-                deg=self.deg,
-                poly_form=self.poly_form,
-                monotonicity=monotonicity,
-                y_min=self.y_min,
-                y_max=self.y_max,
-            )
-            rmse = self.calculate_fitting_rmse(poss_poly, verbose=False)
 
         # refine the solution (until convergence)
         if refine:
@@ -314,7 +330,8 @@ class MmNn():
                     break
             rmse = self.calculate_fitting_rmse(poss_poly)
 
-        # re-fit the solution and further refine it (until convergence)
+        # re-fit the solution (to ensure the mono. and further reduce the RMSE)
+        # and further refine it (until convergence)
         if refit:
             poss_poly, rmse = self.refit_possible_solution(poss_poly)
             while True:
