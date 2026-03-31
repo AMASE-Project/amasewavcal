@@ -10,6 +10,7 @@
 import numpy as np
 from scipy.signal import find_peaks
 from scipy.ndimage import gaussian_filter1d
+from scipy.optimize import minimize
 
 
 def detect_lines(spectrum, N=100, n=20, smooth=True, smooth_sigma=1.):
@@ -91,3 +92,50 @@ def check_solution_monotonicity(solution, y_min, y_max):
         return -1
     else:
         return 0
+
+
+def fit_monotonic_polynomial(
+        ys, wls, deg=2, poly_form=np.polynomial.Polynomial,
+        monotonicity=1., y_min=None, y_max=None):
+    """
+    Fit a monotonic polynomial to the given data points (ys, wls).
+    Return the fitted polynomial coefficients.
+    (monotonicity: 1 for increasing, -1 for decreasing.)
+    """
+    # the objective function to minimize
+    def objective(coeffs):
+        return np.sum((poly_form(coeffs)(ys) - wls) ** 2)  # MSE loss
+
+    # initial guess for the coefficients
+    ini_coeffs = poly_form.fit(ys, wls, deg=deg).convert().coef
+
+    # the constraint function to ensure monotonicity
+    def constraint(coeffs):
+        if y_min is None:
+            y_min_ = np.min(ys)
+        else:
+            y_min_ = y_min
+        if y_max is None:
+            y_max_ = np.max(ys)
+        else:
+            y_max_ = y_max
+        y_test = np.linspace(y_min_, y_max_, 100)
+        wls_test = poly_form(coeffs)(y_test)
+        diffs = np.diff(wls_test)
+        # for increasing, all diffs should be > 0
+        if monotonicity == 1.:
+            return np.min(diffs)
+        # for decreasing, all diffs should be < 0
+        elif monotonicity == -1.:
+            return -np.max(diffs)
+        else:
+            raise ValueError("Monotonicity should be either 1 or -1.")
+
+    # optimize the coefficients with the monotonicity constraint
+    constraints = {'type': 'ineq', 'fun': constraint}
+    result = minimize(objective, ini_coeffs, constraints=constraints)
+    if not result.success:
+        raise RuntimeError("Optimization failed: " + result.message)
+    coeffs = result.x
+    poss_poly = poly_form(coeffs)
+    return poss_poly
