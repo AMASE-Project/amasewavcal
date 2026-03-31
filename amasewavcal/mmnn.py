@@ -211,6 +211,8 @@ class MmNn():
         M_closest_ys = self.N_peak_ys[indices]
         residuals = M_known_wls - N_peak_wls[indices]
         residuals = np.abs(residuals)
+        # store
+        self.M_closest_ys = M_closest_ys
         return residuals, M_known_wls, M_closest_ys
 
     def calculate_fitting_rmse(self, poss_poly, verbose=False):
