@@ -15,6 +15,7 @@ from amasedrp.utils.parallel_processing import run as prun
 from .wavcal_utils import find_nearest
 from .wavcal_utils import inverse_wavelength_solution
 from .wavcal_utils import check_solution_monotonicity
+from .wavcal_utils import fit_solution
 
 
 class MmNn():
@@ -28,7 +29,7 @@ class MmNn():
         m_known_wls: list[float],
         N_peak_ys: list[float],
         n_peak_ys: list[float],
-        peak_y_coor_lim: list[int] = [0, 10000],
+        y_coor_lim: list[int] = [0, 10000],
         deg: int = 3,
         poly_form: object = np.polynomial.Legendre,
         wl_increases_with_y: bool = True,
@@ -46,7 +47,7 @@ class MmNn():
             N significant peaks detected in the uncalibrated spectrum.
         n_peak_ys : list[float]
             n of N most strongest peaks.
-        peak_y_coor_lim : list[int], optional
+        y_coor_lim : list[int], optional
             The y-coordinate limits for detected peaks, by default [0, 10000].
         deg : int, optional
             Degree of the polynomial for wavelength solution, by default 3.
@@ -73,7 +74,7 @@ class MmNn():
         self.m_known_wls = m_known_wls
         self.N_peak_ys = N_peak_ys
         self.n_peak_ys = n_peak_ys
-        self.peak_y_coor_lim = peak_y_coor_lim
+        self.y_coor_lim = y_coor_lim
         self.deg = deg
         self.poly_form = poly_form
         self.wl_increases_with_y = wl_increases_with_y
@@ -87,14 +88,14 @@ class MmNn():
     # fitting all possible wavelength solutions and finding the best one
     # -------------------------------------------------------------------------
 
-    def _fit(ys, wls, deg=2, poly_form=np.polynomial.Legendre):
+    def _fit(ys, wls, deg=2, poly_form=np.polynomial.Polynomial):
         """
         Fit the wavelength solution for given y coordinates and wavelengths.
         """
         try:
-            coeffs = poly_form.fit(ys, wls, deg=deg).convert().coef
-            poss_poly = poly_form(coeffs)
+            poss_poly = fit_solution(ys, wls, deg=deg, poly_form=poly_form)
         except:  # noqa: E722  # NOTE: check which cases may raise exceptions
+            print(f"Warning: fitting failed for ys: {ys}, wls: {wls}.")
             coeffs = np.full(deg+1, 0., dtype=float)
             coeffs[0] = -1.
             poss_poly = poly_form(coeffs)
@@ -238,8 +239,8 @@ class MmNn():
         # # and assign a large RMSE if the solution is not monotonic
         # monotonicity = check_solution_monotonicity(
         #     poss_poly,
-        #     y_min=np.min(self.peak_y_coor_lim).astype(float),
-        #     y_max=np.max(self.peak_y_coor_lim).astype(float),
+        #     y_min=np.min(self.y_coor_lim).astype(float),
+        #     y_max=np.max(self.y_coor_lim).astype(float),
         # )
         # if not monotonicity:
         #     rmse = np.inf
@@ -349,8 +350,8 @@ class MmNn():
         self.solution = poss_poly
         self.solution_rmse = rmse
         # get and store the inverse solution (i.e., from wavelength to y)
-        y_coor_min = np.min(self.peak_y_coor_lim).astype(float)
-        y_coor_max = np.max(self.peak_y_coor_lim).astype(float)
+        y_coor_min = np.min(self.y_coor_lim).astype(float)
+        y_coor_max = np.max(self.y_coor_lim).astype(float)
         if not np.isnan(y_coor_min) and not np.isnan(y_coor_max):
             self.inv_solution = lambda wl: inverse_wavelength_solution(
                 poss_poly, wl, y_min=y_coor_min, y_max=y_coor_max
